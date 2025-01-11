@@ -94,7 +94,7 @@ class _DockState<T extends Object> extends State<Dock<T>>
 
   Offset? findPosition(GlobalKey key) {
     final box = key.currentContext?.findRenderObject() as RenderBox?;
-    return box?.localToGlobal(Offset.zero,);
+    return box?.localToGlobal(Offset.zero);
   }
 
   @override
@@ -179,7 +179,9 @@ class _DockState<T extends Object> extends State<Dock<T>>
                       _transitionController.reset();
                     });
 
-                    final (dragStartPos, dragEndPos) = _positions;
+                    final dragStartPos = _positions.$1;
+                    final dragEndPos = offset;
+                    print('BIBA $dragStartPos $dragEndPos');
 
                     _returnAnimation = Tween(
                       begin: dragEndPos - dragStartPos,
@@ -273,6 +275,13 @@ class _DockState<T extends Object> extends State<Dock<T>>
       _offsetAnimations = List.generate(_items.length, (_) => _idleOffsetAnim);
       if (_draggableIndex != null) _draggableIndex = enteredIndex;
       _items.insert(enteredIndex, _items.removeAt(dragIndex));
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final startingPosition = findPosition(_itemsKeys[_items[enteredIndex]]!);
+        if (startingPosition != null) {
+          _positions = (startingPosition, _positions.$2);
+        }
+      });
     });
   }
 }
