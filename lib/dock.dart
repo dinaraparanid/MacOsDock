@@ -181,7 +181,6 @@ class _DockState<T extends Object> extends State<Dock<T>>
 
                     final dragStartPos = _positions.$1;
                     final dragEndPos = offset;
-                    print('BIBA $dragStartPos $dragEndPos');
 
                     _returnAnimation = Tween(
                       begin: dragEndPos - dragStartPos,
