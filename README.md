@@ -1,3 +1,3 @@
 # MacOS Dock
 
-Animated MacOS dock toolbar widget
+Animated MacOS dock toolbar widget.
