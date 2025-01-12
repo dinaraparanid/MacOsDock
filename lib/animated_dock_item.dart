@@ -1,14 +1,33 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/gestures.dart';
+import 'package:macos_dock/dock.dart';
 import 'package:macos_dock/dock_controller.dart';
 import 'package:macos_dock/dock_item.dart';
 import 'package:macos_dock/dock_item_controller.dart';
 
+/// [DockItem] with self-controlled animations
+/// (drag & drop and return to position)
 final class AnimatedDockItem<T extends Object> extends StatefulWidget {
+
+  /// Item's current index in global list of items
   final int index;
+
+  /// Current item in global list of items
   final T item;
+
+  /// Coefficient that is used to determine
+  /// influence of pointer ratio on the item (translation and scale).
+  ///
+  /// Example: total = 5, index = 2 -> (2 + 0.5) / 5 = 0.5 (middle or 50%).
+  /// If pointer is in middle, influence will be highest for this item.
   final double itemCenterRatio;
+
+  /// [DockController] that manages animation states
+  /// (pointer position and dragging item with its positions)
   final DockController<T> dockController;
+
+  /// [DockItemController] for this item
+  /// (manages animations' controllers and provides states)
   final DockItemController controller;
 
   /// Captures an event when mouse enters borders of an item
@@ -17,6 +36,7 @@ final class AnimatedDockItem<T extends Object> extends StatefulWidget {
   /// Captures an event when mouse moves in bounds of an item
   final void Function(PointerHoverEvent) onHover;
 
+  /// Content for the [DockItem]
   final Widget child;
 
   const AnimatedDockItem({
@@ -35,8 +55,8 @@ final class AnimatedDockItem<T extends Object> extends StatefulWidget {
   State<StatefulWidget> createState() => _AnimatedDockItemState();
 }
 
-final class _AnimatedDockItemState<T extends Object> extends State<AnimatedDockItem<T>>
-  with TickerProviderStateMixin {
+final class _AnimatedDockItemState<T extends Object>
+  extends State<AnimatedDockItem<T>> with TickerProviderStateMixin {
 
   /// Duration to animate item's scale
   static const _scaleAnimDuration = Duration(milliseconds: 200);
@@ -48,9 +68,13 @@ final class _AnimatedDockItemState<T extends Object> extends State<AnimatedDockI
   /// to its position on dock when mouse is released
   static const _returnAnimDuration = Duration(milliseconds: 300);
 
+  /// Animation that is applied to return item to
+  /// the required position in [Dock] when drag pointer is released
   Animation<Offset>? _returnAnimation;
 
+  /// Notifies widget about events related to [widget.dockController]
   void _dockControllerListener() {
+    // Notify widget if drag is started / stopped
     final isDragActive = widget.dockController.draggableItem != null;
 
     if (isDragActive != widget.controller.isDragActive) {
@@ -58,7 +82,9 @@ final class _AnimatedDockItemState<T extends Object> extends State<AnimatedDockI
     }
   }
 
+  /// Notifies widget about events related to [widget.controller.returnController]
   void _returnControllerListener() {
+    // Resets return animation and drag start/end positions
     if (widget.controller.returnController.isCompleted) {
       widget.controller.returnController.reset();
       _returnAnimation = null;
@@ -80,7 +106,6 @@ final class _AnimatedDockItemState<T extends Object> extends State<AnimatedDockI
         duration: _returnAnimDuration,
         vsync: this,
       ),
-      dockController: widget.dockController,
     );
 
     widget.dockController.addListener(_dockControllerListener);
@@ -96,9 +121,7 @@ final class _AnimatedDockItemState<T extends Object> extends State<AnimatedDockI
   }
 
   @override
-  Widget build(BuildContext context) => _animatedItem();
-
-  Widget _animatedItem() {
+  Widget build(BuildContext context) {
     final isDragging = widget.item == widget.dockController.draggableItem;
     final content = _item();
     final contentWhenDrag = AnimatedSize(
@@ -110,6 +133,9 @@ final class _AnimatedDockItemState<T extends Object> extends State<AnimatedDockI
       key: widget.controller.widgetPositionKey,
       animation: widget.controller.returnController,
       builder: (context, _) => Transform.translate(
+        // Translates item back to dock with animation.
+        // In order to launch animation item is required
+        // to still be dragged by widget.dockController.draggableItem
         offset: isDragging ? _returnAnimation?.value ?? Offset.zero : Offset.zero,
         child: Draggable<T>(
           data: widget.item,
@@ -117,26 +143,34 @@ final class _AnimatedDockItemState<T extends Object> extends State<AnimatedDockI
           childWhenDragging: contentWhenDrag,
           onDragStarted: () {
             setState(() {
+              // Cancel return ui
               widget.controller.isReturnAnimating = false;
               widget.dockController.setDraggableItem(widget.item);
             });
+
+            // Should not be in setState
+            // in order to finish return animation
             widget.dockController.setStartPositionFromKey(
               widget.controller.widgetPositionKey
             );
           },
           onDraggableCanceled: (_, offset) async {
             setState(() {
+              // Setting end position and showing return ui
               widget.dockController.setDragEndPosition(offset);
               widget.controller.isReturnAnimating = true;
             });
 
             _returnAnimation = Tween(
-              begin: widget.dockController.returnPosition,
+              begin: widget.dockController.returnVector,
               end: Offset.zero,
             ).animate(widget.controller.returnController);
 
+            // Launching return animation
             widget.controller.returnController.reset();
             await widget.controller.returnController.forward();
+
+            // Clearing draggable item
             setState(() => widget.dockController.setDraggableItem(null));
           },
           child: contentWhenDrag,
@@ -145,6 +179,8 @@ final class _AnimatedDockItemState<T extends Object> extends State<AnimatedDockI
     );
   }
 
+  /// Content of [DockItem] with
+  /// scale, Y translation and swap offsets applied
   Widget _item() => DockItem(
     key: Key('${widget.item}'),
     translationY: widget.controller.itemTranslationY(
@@ -164,18 +200,22 @@ final class _AnimatedDockItemState<T extends Object> extends State<AnimatedDockI
     child: widget.child,
   );
 
+  /// Item content during drag / return events
   Widget _dragShadow({required Widget child}) {
     final isDragging = widget.dockController.draggableItem == widget.item;
     final isPointerInDock = widget.dockController.pointerRatio != null;
 
+    // Return ui
     if (widget.controller.isReturnAnimating) {
       return child;
     }
 
+    // Pointer is in dock, beneath item is empty space
     if (isDragging && isPointerInDock) {
       return Opacity(opacity: 0, child: child);
     }
 
+    // Pointer is outside of dock, free space
     if (isDragging) {
       return SizedBox();
     }

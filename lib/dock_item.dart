@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 /// translated on Y axis via [translationY] (e.g. when mouse approaches),
 /// moved via [offset] (e.g. for drag & drop of nearest items)
 final class DockItem<T> extends StatelessWidget {
+  /// Duration of applied animations (scale & Y translation)
   static const _animationDuration = Duration(milliseconds: 200);
 
   /// Y axis translation
