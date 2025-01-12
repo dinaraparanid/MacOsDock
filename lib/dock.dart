@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:macos_dock/dock_item.dart';
+import 'package:macos_dock/utils/global_position.dart';
 
 /// Dock of the reorderable [items].
 final class Dock<T extends Object> extends StatefulWidget {
@@ -23,58 +24,80 @@ final class Dock<T extends Object> extends StatefulWidget {
 class _DockState<T extends Object> extends State<Dock<T>>
   with TickerProviderStateMixin {
 
+  /// Scale factor applied for [Dock]
+  /// when mouse is in its bounds.
+  /// Also applied for items as the highest bound of scale
   static const _maxScaleFactor = 1.1;
+
+  /// Highest Y axis translation
   static const _maxYTranslation = -10.0;
 
+  /// Duration to animate dock's and items' scales
   static const _scaleAnimDuration = Duration(milliseconds: 200);
+
+  /// Duration to animate swap transition
   static const _swapAnimDuration = Duration(milliseconds: 100);
+
+  /// Duration to animate dragged item return
+  /// to its position on dock when mouse is released
   static const _returnAnimDuration = Duration(milliseconds: 300);
-  static const _dragResetDuration = Duration(milliseconds: 10);
 
   final dockKey = GlobalKey();
-  late final Map<T, GlobalKey> _itemsKeys;
 
   /// [T] items being manipulated.
-  late final List<T> _items = widget.items.toList();
+  late final _items = widget.items.toList();
+  late final _itemsKeys = { for (var x in _items) x : GlobalKey() };
 
   double? _pointerRatio;
   int? _draggableIndex;
 
-  var _positions = (Offset.zero, Offset.zero);
+  var _dragStartPosition = Offset.zero;
+  var _dragEndPosition = Offset.zero;
 
-  late final AnimationController _transitionController;
-  late final AnimationController _returnController;
+  late final _swapController = AnimationController(
+    duration: _swapAnimDuration,
+    vsync: this,
+  );
+
+  late final _returnController = AnimationController(
+    duration: _returnAnimDuration,
+    vsync: this,
+  );
+
   Animation<Offset>? _returnAnimation;
-  late List<Tween<Offset>> _offsetAnimations;
+  late var _offsetAnimations = _idleAnimatedOffsets;
 
-  Tween<Offset> get _idleOffsetAnim => Tween<Offset>(
+  Tween<Offset> get _idleAnimOffset => Tween<Offset>(
     begin: Offset.zero,
     end: Offset.zero,
   );
 
-  Tween<Offset> get _forwardOffsetAnim => Tween<Offset>(
+  Tween<Offset> get _forwardAnimOffset => Tween<Offset>(
     begin: Offset.zero,
     end: Offset(1, 0),
   );
 
-  Tween<Offset> get _backwardOffsetAnim => Tween<Offset>(
+  Tween<Offset> get _backwardAnimOffset => Tween<Offset>(
     begin: Offset.zero,
     end: Offset(-1, 0),
   );
 
-  double itemScale(int index) => itemProperty(
+  List<Tween<Offset>> get _idleAnimatedOffsets =>
+    List.generate(_items.length, (_) => _idleAnimOffset);
+
+  double _itemScale(int index) => _itemProperty(
     index: index,
     baseValue: 1.0,
     maxValue: _maxScaleFactor,
   );
 
-  double itemTranslationY(int index) => itemProperty(
+  double _itemTranslationY(int index) => _itemProperty(
     index: index,
     baseValue: 0.0,
     maxValue: _maxYTranslation,
   );
 
-  double itemProperty({
+  double _itemProperty({
     required int index,
     required double baseValue,
     required double maxValue,
@@ -88,38 +111,37 @@ class _DockState<T extends Object> extends State<Dock<T>>
     return res;
   }
 
-  void initPositions() {
-    _positions = (Offset.zero, Offset.zero);
+  void _setStartPositionFromKey(GlobalKey key) {
+    final startingPosition = key.globalPosition;
+    if (startingPosition != null) {
+      _dragStartPosition = startingPosition;
+    }
   }
 
-  Offset? findPosition(GlobalKey key) {
-    final box = key.currentContext?.findRenderObject() as RenderBox?;
-    return box?.localToGlobal(Offset.zero);
+  void _resetPositions() {
+    _dragStartPosition = Offset.zero;
+    _dragEndPosition = Offset.zero;
+  }
+
+  void _resetReturnController() {
+    if (_returnController.isCompleted) {
+      _returnController.reset();
+      _returnAnimation = null;
+      _resetPositions();
+    }
   }
 
   @override
   void initState() {
     super.initState();
-
-    _itemsKeys = { for (var x in _items) x : GlobalKey() };
-
-    _transitionController = AnimationController(
-      duration: _swapAnimDuration,
-      vsync: this,
-    );
-
-    _returnController = AnimationController(
-      duration: _returnAnimDuration,
-      vsync: this,
-    );
-
-    _offsetAnimations = List.generate(_items.length, (_) => _idleOffsetAnim);
+    _returnController.addListener(_resetReturnController);
   }
 
   @override
   void dispose() {
     super.dispose();
-    _transitionController.dispose();
+    _returnController.removeListener(_resetReturnController);
+    _swapController.dispose();
     _returnController.dispose();
   }
 
@@ -142,97 +164,78 @@ class _DockState<T extends Object> extends State<Dock<T>>
           mainAxisSize: MainAxisSize.min,
           children: _items.indexed.map((indexedItem) {
             final (index, item) = indexedItem;
-            final key = _itemsKeys[item]!;
-            final widget = _item(index: index, item: item);
-            final widgetWhenDrag = AnimatedSize(
-              duration: _scaleAnimDuration,
-              child: _itemWhenDragged(index: index, child: widget),
-            );
-
-            final isDragging = index == _draggableIndex;
-
-            return AnimatedBuilder(
-              key: key,
-              animation: _returnController,
-              builder: (context, _) => Transform.translate(
-                offset: isDragging ? _returnAnimation?.value ?? Offset.zero : Offset.zero,
-                child: Draggable<T>(
-                  data: item,
-                  feedback: widget,
-                  childWhenDragging: widgetWhenDrag,
-                  onDragStarted: () {
-                    setState(() => _draggableIndex = index);
-
-                    final startingPosition = findPosition(key);
-                    if (startingPosition != null) {
-                      _positions = (startingPosition, _positions.$2);
-                    }
-                  },
-                  onDraggableCanceled: (_, offset) async {
-                    if (offset == _positions.$1) {
-                      initPositions();
-                      return;
-                    }
-
-                    setState(() {
-                      _positions = (_positions.$1, offset);
-                      _transitionController.reset();
-                    });
-
-                    final dragStartPos = _positions.$1;
-                    final dragEndPos = offset;
-
-                    _returnAnimation = Tween(
-                      begin: dragEndPos - dragStartPos,
-                      end: Offset.zero,
-                    ).animate(_returnController);
-
-                    _returnController.forward();
-
-                    Future<void>.delayed(
-                      _dragResetDuration,
-                      () =>_draggableIndex = null,
-                    );
-
-                    Future<void>.delayed(_returnAnimDuration, () {
-                      if (mounted) {
-                        setState(() {
-                          _returnController.reset();
-                          _returnAnimation = null;
-                          initPositions();
-                        });
-                      }
-                    });
-                  },
-                  child: widgetWhenDrag,
-                ),
-              ),
-            );
+            return _animatedItem(index: index, item: item);
           }).toList(growable: false),
         ),
       ),
     ),
   );
 
+  Widget _animatedItem({
+    required int index,
+    required T item,
+  }) {
+    final isDragging = index == _draggableIndex;
+    final key = _itemsKeys[item]!;
+    final content = _item(index: index, item: item);
+    final contentWhenDrag = AnimatedSize(
+      duration: _scaleAnimDuration,
+      child: _dragShadow(index: index, child: content),
+    );
+
+    return AnimatedBuilder(
+      key: key,
+      animation: _returnController,
+      builder: (context, _) => Transform.translate(
+        offset: isDragging ? _returnAnimation?.value ?? Offset.zero : Offset.zero,
+        child: Draggable<T>(
+          data: item,
+          feedback: content,
+          childWhenDragging: contentWhenDrag,
+          onDragStarted: () {
+            setState(() => _draggableIndex = index);
+            _setStartPositionFromKey(key);
+          },
+          onDraggableCanceled: (_, offset) {
+            setState(() {
+              _dragEndPosition = offset;
+              _swapController.reset();
+            });
+
+            _returnAnimation = Tween(
+              begin: _dragEndPosition - _dragStartPosition,
+              end: Offset.zero,
+            ).animate(_returnController);
+
+            _returnController.forward();
+
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _draggableIndex = null;
+            });
+          },
+          child: contentWhenDrag,
+        ),
+      ),
+    );
+  }
+
   Widget _item({
     required int index,
     required T item,
   }) => DockItem(
     key: Key('$item'),
-    translation: itemTranslationY(index),
-    scale: itemScale(index),
-    offset: _offsetAnimations[index].animate(_transitionController),
-    onEnter: (event) async {
+    translationY: _itemTranslationY(index),
+    scale: _itemScale(index),
+    offset: _offsetAnimations[index].animate(_swapController),
+    onEnter: (event) {
       _updatePointerState(position: event.position);
-      await _updateListIfDragging(enteredIndex: index);
+      _updateListIfDragging(enteredIndex: index);
     },
-    onHover: (event) => setState(() => _updatePointerState(
-      position: event.position,
-    )),
+    onHover: (event) => _updatePointerState(position: event.position),
     child: widget.builder(item),
   );
 
-  Widget _itemWhenDragged({
+  Widget _dragShadow({
     required int index,
     required Widget child,
   }) {
@@ -264,23 +267,25 @@ class _DockState<T extends Object> extends State<Dock<T>>
 
     final isDragToRight = dragIndex < enteredIndex;
 
-    _offsetAnimations = List.generate(_items.length, (_) => _idleOffsetAnim);
-    _offsetAnimations[enteredIndex] = isDragToRight ? _backwardOffsetAnim : _forwardOffsetAnim;
+    _offsetAnimations = _idleAnimatedOffsets;
+    _offsetAnimations[enteredIndex] = isDragToRight
+      ? _backwardAnimOffset : _forwardAnimOffset;
 
-    _transitionController.reset();
-    await _transitionController.forward();
+    _swapController.reset();
+    await _swapController.forward();
 
     setState(() {
-      _offsetAnimations = List.generate(_items.length, (_) => _idleOffsetAnim);
-      if (_draggableIndex != null) _draggableIndex = enteredIndex;
-      _items.insert(enteredIndex, _items.removeAt(dragIndex));
+      _offsetAnimations = _idleAnimatedOffsets;
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final startingPosition = findPosition(_itemsKeys[_items[enteredIndex]]!);
-        if (startingPosition != null) {
-          _positions = (startingPosition, _positions.$2);
-        }
-      });
+      if (_draggableIndex != null) {
+        _draggableIndex = enteredIndex;
+      }
+
+      _items.insert(enteredIndex, _items.removeAt(dragIndex));
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _setStartPositionFromKey(_itemsKeys[_items[enteredIndex]]!);
     });
   }
 }
